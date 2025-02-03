@@ -44,6 +44,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <chrono>
+
 
 using namespace dealii;
 
@@ -195,6 +197,17 @@ public:
  * Each diagonal block (velocity, pressure) uses an inner preconditioner
  * that can be ILU or AMG. We provide two “initialize” methods.
  */
+
+// Trivial Preconditioner
+  class PreconditionIdentity : public BlockPrecondition
+  {
+  public:
+    void vmult(TrilinosWrappers::MPI::BlockVector       &dst,
+               const TrilinosWrappers::MPI::BlockVector &src) const
+    {
+      dst = src;
+    }
+  };
 
 class PreconditionBlockDiagonal : public BlockPrecondition
 {
@@ -527,8 +540,8 @@ void initialize(
 };
 
 
-// Yoshida preconditioner.
-class PreconditionYoshida : public BlockPrecondition {
+// Yosida preconditioner.
+class PreconditionYosida : public BlockPrecondition {
  public:
 
  void initialize_inner_preconditioner(
@@ -660,7 +673,10 @@ class PreconditionYoshida : public BlockPrecondition {
 
     // Solve the problem.
     void
-    solve();
+    solve(int precond_type, bool use_ilu, double &first_dt_solve_time,
+                                        int &first_dt_gmres_iters, double &total_solve_time, double &precond_construct_time);
+
+    void run_with_preconditioners();
 
     // Compute the error.
     double
@@ -683,7 +699,8 @@ protected:
 
     // Solve the problem for one time step.
     void
-    solve_time_step();
+    solve_time_step(int precond_type, bool use_ilu, double &elapsed_time, int &gmres_iters,
+                                                  double &precond_construct_time);
 
     // Output.
     void

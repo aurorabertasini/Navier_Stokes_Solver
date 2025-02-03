@@ -319,13 +319,6 @@ void MonolithicNavierStokes<dim>::assemble_rhs(const double &time)
             for (unsigned int d = 0; d < dim; ++d)
                 forcing_term_new_tensor[d] = f_new_loc[d];
 
-            // Vector<double> f_neumann_loc(dim);
-            // neumann_condition.set_time(time);
-            // neumann_condition.vector_value(fe_values.quadrature_point(q),
-            //                                f_neumann_loc);
-            // Tensor<1, dim> f_neumann_tensor;
-            // for (unsigned int d = 0; d < dim; ++d)
-            //     f_neumann_tensor[d] = f_neumann_loc[d];
 
             for (unsigned int i = 0; i < dofs_per_cell; ++i)
             {
@@ -398,139 +391,202 @@ void MonolithicNavierStokes<dim>::assemble_rhs(const double &time)
     }
 }
 
+
 template <unsigned int dim>
-void MonolithicNavierStokes<dim>::solve_time_step()
+void MonolithicNavierStokes<dim>::solve_time_step(int precond_type, bool use_ilu, 
+                                                  double &elapsed_time, int &gmres_iters,
+                                                  double &precond_construct_time)
 {
-    // Choose the preconditioner type:
-    // 1 = BLOCK DIAGONAL, 2 = SIMPLE, 3 = ASIMPLE, 4 = YOSHIDA.
-    int precond_type = 3; // Set this value as needed
+    double alpha = 0.5;
+    unsigned int maxiter_inner = 10000;
+    double tol_inner = 1e-5;
+    bool use_inner_solver = true;
 
-    // Local parameters for inner solvers and preconditioner initialization.
-    double alpha = 0.5;                 // Damping parameter for SIMPLE-like preconditioners
-    unsigned int maxiter_inner = 10000; // Maximum iterations for inner solvers
-    double tol_inner = 1e-5;            // Tolerance for inner solvers
-    bool use_ilu = true;                // Flag: true for ILU, false for AMG
-    bool use_inner_solver = true;       // Flag: true for inner GMRES, false for inner CG
-
-    // Set up the outer GMRES solver.
-    SolverControl solver_control(1000000, 1e-4 * system_rhs.l2_norm());
+    SolverControl solver_control(1000000, 1e-4);
     SolverGMRES<TrilinosWrappers::MPI::BlockVector> solver(solver_control);
 
     std::shared_ptr<BlockPrecondition> block_precondition;
 
-    // Select and initialize the preconditioner based on precond_type.
+    auto precond_start = std::chrono::high_resolution_clock::now();
+
     switch (precond_type)
     {
-    case 1:
-    { // BLOCK DIAGONAL preconditioner
-        auto block_diag_precondition = std::make_shared<PreconditionBlockDiagonal>();
-        block_diag_precondition->initialize(
-            system_matrix.block(0, 0), // Velocity block (F_matrix)
-            pressure_mass.block(1, 1), // Pressure block (mass matrix)
-            maxiter_inner,             // Maximum iterations for inner solves
-            tol_inner,                 // Tolerance for inner solves
-            use_ilu);
-        block_precondition = block_diag_precondition;
-        break;
-    }
-    case 2:
-    { // SIMPLE preconditioner
-        auto simple_precondition = std::make_shared<PreconditionSIMPLE>();
-        simple_precondition->initialize(
-            system_matrix.block(0, 0), // F_matrix
-            system_matrix.block(1, 0), // -B_matrix (bottom-left block)
-            system_matrix.block(0, 1), // B^T_matrix (top-right block)
-            solution_owned,            // Example block vector for temporary storage
-            alpha,                     // Damping parameter (alpha)
-            maxiter_inner,             // Maximum iterations for inner solves
-            tol_inner,                 // Tolerance for inner solves
-            use_ilu                    // Flag: true for ILU, false for AMG
-        );
-        block_precondition = simple_precondition;
-        break;
-    }
-    case 3:
-    { // ASIMPLE preconditioner
-        auto asimple_precondition = std::make_shared<PreconditionaSIMPLE>();
-        asimple_precondition->initialize(
-            system_matrix.block(0, 0), system_matrix.block(1, 0),
-            system_matrix.block(0, 1), solution_owned, alpha,
-            use_inner_solver, maxiter_inner,
-            tol_inner, use_ilu);
-        block_precondition = asimple_precondition;
-        break;
-    }
-    case 4:
-    { // YOSHIDA preconditioner
-        auto yoshida_precondition = std::make_shared<PreconditionYoshida>();
-        yoshida_precondition->initialize(
-            system_matrix.block(0, 0), system_matrix.block(1, 0),
-            system_matrix.block(0, 1), velocity_mass.block(0, 0), solution_owned,
-            maxiter_inner,
-            tol_inner,
-            use_ilu);
-        block_precondition = yoshida_precondition;
-        break;
-    }
-    default:
-        Assert(false, ExcNotImplemented());
+        case 1: {
+            auto block_diag_precondition = std::make_shared<PreconditionBlockDiagonal>();
+            block_diag_precondition->initialize(
+                system_matrix.block(0, 0), pressure_mass.block(1, 1),
+                maxiter_inner, tol_inner, use_ilu);
+            block_precondition = block_diag_precondition;
+            break;
+        }
+        case 2: {
+            auto simple_precondition = std::make_shared<PreconditionSIMPLE>();
+            simple_precondition->initialize(
+                system_matrix.block(0, 0), system_matrix.block(1, 0),
+                system_matrix.block(0, 1), solution_owned, alpha,
+                maxiter_inner, tol_inner, use_ilu);
+            block_precondition = simple_precondition;
+            break;
+        }
+        case 3: {
+            auto asimple_precondition = std::make_shared<PreconditionaSIMPLE>();
+            asimple_precondition->initialize(
+                system_matrix.block(0, 0), system_matrix.block(1, 0),
+                system_matrix.block(0, 1), solution_owned, alpha,
+                use_inner_solver, maxiter_inner, tol_inner, use_ilu);
+            block_precondition = asimple_precondition;
+            break;
+        }
+        case 4: {
+            auto yosida_precondition = std::make_shared<PreconditionYosida>();
+            yosida_precondition->initialize(
+                system_matrix.block(0, 0), system_matrix.block(1, 0),
+                system_matrix.block(0, 1), velocity_mass.block(0, 0),
+                solution_owned, maxiter_inner, tol_inner, use_ilu);
+            block_precondition = yosida_precondition;
+            break;
+        }
+        case 0: {
+            block_precondition = std::make_shared<PreconditionIdentity>();
+            break;
+        }
+        default:
+            Assert(false, ExcNotImplemented());
     }
 
-    // Solve the full system (velocity + pressure) using GMRES with the chosen preconditioner.
-    solver.solve(system_matrix,
-                 solution_owned,
-                 system_rhs,
-                 *block_precondition);
+    auto precond_end = std::chrono::high_resolution_clock::now();
+    precond_construct_time = std::chrono::duration<double>(precond_end - precond_start).count();
 
-    pcout << "  " << solver_control.last_step() << " GMRES iterations" << std::endl;
+    auto start = std::chrono::high_resolution_clock::now();
+    solver.solve(system_matrix, solution_owned, system_rhs, *block_precondition);
+    auto end = std::chrono::high_resolution_clock::now();
 
-    // Update the ghosted solution for output or further usage.
+    elapsed_time = std::chrono::duration<double>(end - start).count();
+    gmres_iters = solver_control.last_step();
+
     solution = solution_owned;
-
-    solution.update_ghost_values();
 }
 
+
 template <unsigned int dim>
-void MonolithicNavierStokes<dim>::solve()
+void MonolithicNavierStokes<dim>::run_with_preconditioners()
 {
     pcout << "===============================================" << std::endl;
+    pcout << "Running Navier-Stokes solver with multiple preconditioners" << std::endl;
+    pcout << "===============================================" << std::endl;
+
+    struct SolveResult {
+        int precond_type;
+        int gmres_first_dt;
+        double time_first_dt;
+        double total_solve_time;
+        double precond_construct_time;
+        bool use_ilu;
+    };
+
+    std::vector<SolveResult> results;
+
+    for (int precond_type = 0; precond_type < 5; ++precond_type)
+{
+    for (bool use_ilu : {false, true})
+    {
+        setup(); // Reset everything before each solve
+        
+        double first_dt_solve_time = 0.0;
+        int first_dt_gmres_iters = 0;
+        double total_solve_time = 0.0;
+        double precond_construct_time = 0.0;
+
+        auto start_total = std::chrono::high_resolution_clock::now();
+
+        solve(precond_type, use_ilu, first_dt_solve_time, first_dt_gmres_iters, total_solve_time, precond_construct_time);
+
+        auto end_total = std::chrono::high_resolution_clock::now();
+        total_solve_time = std::chrono::duration<double>(end_total - start_total).count();
+
+        results.push_back({precond_type, first_dt_gmres_iters, first_dt_solve_time, 
+                           total_solve_time, precond_construct_time, use_ilu});
+    }
+}
+
+    // Print results table
+    pcout << "============================================================================================" << std::endl;
+    pcout << "Preconditioner Performance Summary" << std::endl;
+    pcout << "============================================================================================" << std::endl;
+    pcout << std::setw(15) << "Precond Type"
+          << std::setw(20) << "GMRES 1st DT"
+          << std::setw(20) << "Time 1st DT (s)"
+          << std::setw(25) << "Total Solve Time (s)"
+          << std::setw(25) << "Precond Construct (s)"
+          << std::setw(15) << "Use ILU" << std::endl;
+    pcout << "--------------------------------------------------------------------------------------------" << std::endl;
+
+    for (const auto &result : results)
+    {
+        pcout << std::setw(15) << result.precond_type
+              << std::setw(20) << result.gmres_first_dt
+              << std::setw(20) << result.time_first_dt
+              << std::setw(25) << result.total_solve_time
+              << std::setw(25) << result.precond_construct_time
+              << std::setw(15) << (result.use_ilu ? "True" : "False") << std::endl;
+    }
+
+    pcout << "============================================================================================" << std::endl;
+}
+
+// Modify solve to accept preconditioner parameters
+
+template <unsigned int dim>
+void MonolithicNavierStokes<dim>::solve(int precond_type, bool use_ilu, double &first_dt_solve_time,
+                                        int &first_dt_gmres_iters, double &total_solve_time, double &precond_construct_time)
+{
+    pcout << "Solving for preconditioner type " << precond_type << " with ILU = " << (use_ilu ? "True" : "False") << std::endl;
 
     time = 0.0;
 
     // Apply the initial condition.
     {
-        pcout << "Applying the initial condition" << std::endl;
-
-        // if i know the exact solution:
-        //  exact_solution.set_time(time);
         VectorTools::interpolate(dof_handler, initial_condition, solution_owned);
         solution = solution_owned;
-
-        // if not, apply initial_condition
-
-        // Output the initial solution.
-        // output(0);
-        pcout << "-----------------------------------------------" << std::endl;
     }
 
     unsigned int time_step = 0;
+    auto start_total = std::chrono::high_resolution_clock::now();
 
     while (time < T - 0.5 * deltat)
     {
         time += deltat;
         ++time_step;
 
-        pcout << "n = " << std::setw(3) << time_step << ", t = " << std::setw(5)
-              << time << ":" << std::flush;
+        pcout << "n = " << std::setw(3) << time_step << std::endl << std::flush;
 
         assemble_base_matrix();
         assemble_rhs(time);
-        solve_time_step();
-        // compute_lift_drag();
 
-        output(time_step);
+        double elapsed_time;
+        int gmres_iters;
+        double construct_time;
+
+        solve_time_step(precond_type, use_ilu, elapsed_time, gmres_iters, construct_time);
+
+        if (time_step == 1)
+        {
+            first_dt_solve_time = elapsed_time;
+            first_dt_gmres_iters = gmres_iters;
+            precond_construct_time = construct_time;
+        }
+
+        compute_lift_drag();
+        // output(time_step);
     }
+
+    auto end_total = std::chrono::high_resolution_clock::now();
+    total_solve_time = std::chrono::duration<double>(end_total - start_total).count();
 }
+
+
+
+
 
 template <unsigned int dim>
 void MonolithicNavierStokes<dim>::output(const unsigned int &time_step)
