@@ -34,7 +34,7 @@ int main(int argc, char *argv[])
 
     double nu = (uM * cylinder_radius) / Re;
 
-    int choice = 0;
+    int choice = 3;
 
     if (mpi_rank == 0)
     {                // std::cout << "Div u_star: " << div_u_star[q] << std::endl;
@@ -51,7 +51,7 @@ int main(int argc, char *argv[])
 
         while (choice < 1 || choice > 6)
         {
-            std::cin >> choice;
+            // std::cin >> choice;
             if (choice < 1 || choice > 6)
             {
                 std::cout << "Invalid choice. Please enter a valid choice: ";

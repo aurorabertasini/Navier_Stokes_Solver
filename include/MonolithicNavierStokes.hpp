@@ -759,6 +759,8 @@ protected:
     // Function for the initial condition
     Function_u0 initial_condition;
 
+    bool use_inner_solver;
+
     // // Exact solution.
     // ExactSolution exact_solution;
 

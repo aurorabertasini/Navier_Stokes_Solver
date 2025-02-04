@@ -319,7 +319,6 @@ void MonolithicNavierStokes<dim>::assemble_rhs(const double &time)
             for (unsigned int d = 0; d < dim; ++d)
                 forcing_term_new_tensor[d] = f_new_loc[d];
 
-
             for (unsigned int i = 0; i < dofs_per_cell; ++i)
             {
                 cell_rhs(i) += scalar_product(previous_velocity_values[q],
@@ -391,18 +390,16 @@ void MonolithicNavierStokes<dim>::assemble_rhs(const double &time)
     }
 }
 
-
 template <unsigned int dim>
-void MonolithicNavierStokes<dim>::solve_time_step(int precond_type, bool use_ilu, 
+void MonolithicNavierStokes<dim>::solve_time_step(int precond_type, bool use_ilu,
                                                   double &elapsed_time, int &gmres_iters,
                                                   double &precond_construct_time)
 {
-    double alpha = 0.5;
+    double alpha = 1;
     unsigned int maxiter_inner = 10000;
     double tol_inner = 1e-5;
-    bool use_inner_solver = false;
 
-    SolverControl solver_control(1000000, 1e-4 * system_rhs.l2_norm());
+    SolverControl solver_control(1000000, 1e-7);
     SolverGMRES<TrilinosWrappers::MPI::BlockVector> solver(solver_control);
 
     std::shared_ptr<BlockPrecondition> block_precondition;
@@ -411,47 +408,54 @@ void MonolithicNavierStokes<dim>::solve_time_step(int precond_type, bool use_ilu
 
     switch (precond_type)
     {
-        case 1: {
-            auto block_diag_precondition = std::make_shared<PreconditionBlockDiagonal>();
-            block_diag_precondition->initialize(
-                system_matrix.block(0, 0), pressure_mass.block(1, 1),
-                maxiter_inner, tol_inner, use_ilu);
-            block_precondition = block_diag_precondition;
-            break;
-        }
-        case 2: {
-            auto simple_precondition = std::make_shared<PreconditionSIMPLE>();
-            simple_precondition->initialize(
-                system_matrix.block(0, 0), system_matrix.block(1, 0),
-                system_matrix.block(0, 1), solution_owned, alpha,
-                maxiter_inner, tol_inner, use_ilu);
-            block_precondition = simple_precondition;
-            break;
-        }
-        case 3: {
-            auto asimple_precondition = std::make_shared<PreconditionaSIMPLE>();
-            asimple_precondition->initialize(
-                system_matrix.block(0, 0), system_matrix.block(1, 0),
-                system_matrix.block(0, 1), solution_owned, alpha,
-                use_inner_solver, maxiter_inner, tol_inner, use_ilu);
-            block_precondition = asimple_precondition;
-            break;
-        }
-        case 4: {
-            auto yosida_precondition = std::make_shared<PreconditionYosida>();
-            yosida_precondition->initialize(
-                system_matrix.block(0, 0), system_matrix.block(1, 0),
-                system_matrix.block(0, 1), velocity_mass.block(0, 0),
-                solution_owned, maxiter_inner, tol_inner, use_ilu);
-            block_precondition = yosida_precondition;
-            break;
-        }
-        case 0: {
-            block_precondition = std::make_shared<PreconditionIdentity>();
-            break;
-        }
-        default:
-            Assert(false, ExcNotImplemented());
+    case 1:
+    {
+        auto block_diag_precondition = std::make_shared<PreconditionBlockDiagonal>();
+        block_diag_precondition->initialize(
+            system_matrix.block(0, 0), pressure_mass.block(1, 1),
+            maxiter_inner, tol_inner, use_ilu);
+        block_precondition = block_diag_precondition;
+        break;
+    }
+    case 2:
+    {
+        auto simple_precondition = std::make_shared<PreconditionSIMPLE>();
+        simple_precondition->initialize(
+            system_matrix.block(0, 0), system_matrix.block(1, 0),
+            system_matrix.block(0, 1), solution_owned, alpha,
+            maxiter_inner, tol_inner, use_ilu);
+        block_precondition = simple_precondition;
+        break;
+    }
+    case 3:
+    {
+
+        auto asimple_precondition = std::make_shared<PreconditionaSIMPLE>();
+        asimple_precondition->initialize(
+            system_matrix.block(0, 0), system_matrix.block(1, 0),
+            system_matrix.block(0, 1), solution_owned, alpha,
+            use_inner_solver, maxiter_inner, tol_inner, use_ilu);
+        block_precondition = asimple_precondition;
+
+        break;
+    }
+    case 4:
+    {
+        auto yosida_precondition = std::make_shared<PreconditionYosida>();
+        yosida_precondition->initialize(
+            system_matrix.block(0, 0), system_matrix.block(1, 0),
+            system_matrix.block(0, 1), velocity_mass.block(0, 0),
+            solution_owned, maxiter_inner, tol_inner, use_ilu);
+        block_precondition = yosida_precondition;
+        break;
+    }
+    case 0:
+    {
+        block_precondition = std::make_shared<PreconditionIdentity>();
+        break;
+    }
+    default:
+        Assert(false, ExcNotImplemented());
     }
 
     auto precond_end = std::chrono::high_resolution_clock::now();
@@ -468,7 +472,6 @@ void MonolithicNavierStokes<dim>::solve_time_step(int precond_type, bool use_ilu
     solution = solution_owned;
 }
 
-
 template <unsigned int dim>
 void MonolithicNavierStokes<dim>::run_with_preconditioners()
 {
@@ -476,8 +479,9 @@ void MonolithicNavierStokes<dim>::run_with_preconditioners()
     pcout << "Running Navier-Stokes solver with multiple preconditioners" << std::endl;
     pcout << "===============================================" << std::endl;
 
-    struct SolveResult {
-        int precond_type;
+    struct SolveResult
+    {
+        std::string precond_type;
         int gmres_first_dt;
         double time_first_dt;
         double total_solve_time;
@@ -487,28 +491,54 @@ void MonolithicNavierStokes<dim>::run_with_preconditioners()
 
     std::vector<SolveResult> results;
 
-    for (int precond_type = 3; precond_type < 4; ++precond_type)
-{
-    for (bool use_ilu : {true, false})
+    for (int precond_type = 2; precond_type < 5; ++precond_type)
     {
-        setup(); // Reset everything before each solve
-        
-        double first_dt_solve_time = 0.0;
-        int first_dt_gmres_iters = 0;
-        double total_solve_time = 0.0;
-        double precond_construct_time = 0.0;
+        for (bool use_ilu : {true, false})
+        {
+            if (precond_type == 3)
+                for (bool use_inner_solver_ : {true, false})
+                {
+                    use_inner_solver = use_inner_solver_;
+                    setup(); // Reset everything before each solve
 
-        auto start_total = std::chrono::high_resolution_clock::now();
+                    double first_dt_solve_time = 0.0;
+                    int first_dt_gmres_iters = 0;
+                    double total_solve_time = 0.0;
+                    double precond_construct_time = 0.0;
 
-        solve(precond_type, use_ilu, first_dt_solve_time, first_dt_gmres_iters, total_solve_time, precond_construct_time);
+                    auto start_total = std::chrono::high_resolution_clock::now();
 
-        auto end_total = std::chrono::high_resolution_clock::now();
-        total_solve_time = std::chrono::duration<double>(end_total - start_total).count();
+                    solve(precond_type, use_ilu, first_dt_solve_time, first_dt_gmres_iters, total_solve_time, precond_construct_time);
 
-        results.push_back({precond_type, first_dt_gmres_iters, first_dt_solve_time, 
-                           total_solve_time, precond_construct_time, use_ilu});
+                    auto end_total = std::chrono::high_resolution_clock::now();
+                    total_solve_time = std::chrono::duration<double>(end_total - start_total).count();
+
+                    std::string name = std::to_string(precond_type) + " " + std::to_string(use_inner_solver);
+
+                    results.push_back({name, first_dt_gmres_iters, first_dt_solve_time,
+                                       total_solve_time, precond_construct_time, use_ilu});
+                }else
+                { 
+                    setup(); // Reset everything before each solve
+
+                    double first_dt_solve_time = 0.0;
+                    int first_dt_gmres_iters = 0;
+                    double total_solve_time = 0.0;
+                    double precond_construct_time = 0.0;
+
+                    auto start_total = std::chrono::high_resolution_clock::now();
+
+                    solve(precond_type, use_ilu, first_dt_solve_time, first_dt_gmres_iters, total_solve_time, precond_construct_time);
+
+                    auto end_total = std::chrono::high_resolution_clock::now();
+                    total_solve_time = std::chrono::duration<double>(end_total - start_total).count();
+
+                    std::string name = std::to_string(precond_type) + " " + std::to_string(use_inner_solver);
+
+                    results.push_back({name, first_dt_gmres_iters, first_dt_solve_time,
+                                       total_solve_time, precond_construct_time, use_ilu});}
+        }
     }
-}
 
     // Print results table
     pcout << "============================================================================================" << std::endl;
@@ -554,12 +584,13 @@ void MonolithicNavierStokes<dim>::solve(int precond_type, bool use_ilu, double &
     unsigned int time_step = 0;
     auto start_total = std::chrono::high_resolution_clock::now();
 
-    while (time < 3.1 * deltat)
+    while (time < deltat)
     {
         time += deltat;
         ++time_step;
 
-        pcout << "n = " << std::setw(3) << time_step << std::endl << std::flush;
+        pcout << "n = " << std::setw(3) << time_step << std::endl
+              << std::flush;
 
         assemble_base_matrix();
         assemble_rhs(time);
@@ -584,10 +615,6 @@ void MonolithicNavierStokes<dim>::solve(int precond_type, bool use_ilu, double &
     auto end_total = std::chrono::high_resolution_clock::now();
     total_solve_time = std::chrono::duration<double>(end_total - start_total).count();
 }
-
-
-
-
 
 template <unsigned int dim>
 void MonolithicNavierStokes<dim>::output(const unsigned int &time_step)
