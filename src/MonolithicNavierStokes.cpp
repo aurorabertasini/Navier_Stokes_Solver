@@ -400,9 +400,9 @@ void MonolithicNavierStokes<dim>::solve_time_step(int precond_type, bool use_ilu
     double alpha = 0.5;
     unsigned int maxiter_inner = 10000;
     double tol_inner = 1e-5;
-    bool use_inner_solver = true;
+    bool use_inner_solver = false;
 
-    SolverControl solver_control(1000000, 1e-4);
+    SolverControl solver_control(1000000, 1e-4 * system_rhs.l2_norm());
     SolverGMRES<TrilinosWrappers::MPI::BlockVector> solver(solver_control);
 
     std::shared_ptr<BlockPrecondition> block_precondition;
@@ -460,6 +460,7 @@ void MonolithicNavierStokes<dim>::solve_time_step(int precond_type, bool use_ilu
     auto start = std::chrono::high_resolution_clock::now();
     solver.solve(system_matrix, solution_owned, system_rhs, *block_precondition);
     auto end = std::chrono::high_resolution_clock::now();
+    pcout << "  " << solver_control.last_step() << " GMRES iterations" << std::endl;
 
     elapsed_time = std::chrono::duration<double>(end - start).count();
     gmres_iters = solver_control.last_step();
@@ -486,9 +487,9 @@ void MonolithicNavierStokes<dim>::run_with_preconditioners()
 
     std::vector<SolveResult> results;
 
-    for (int precond_type = 0; precond_type < 5; ++precond_type)
+    for (int precond_type = 3; precond_type < 4; ++precond_type)
 {
-    for (bool use_ilu : {false, true})
+    for (bool use_ilu : {true, false})
     {
         setup(); // Reset everything before each solve
         
@@ -553,7 +554,7 @@ void MonolithicNavierStokes<dim>::solve(int precond_type, bool use_ilu, double &
     unsigned int time_step = 0;
     auto start_total = std::chrono::high_resolution_clock::now();
 
-    while (time < T - 0.5 * deltat)
+    while (time < 3.1 * deltat)
     {
         time += deltat;
         ++time_step;

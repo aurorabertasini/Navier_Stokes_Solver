@@ -208,6 +208,7 @@ public:
       dst = src;
     }
   };
+  
 
 class PreconditionBlockDiagonal : public BlockPrecondition
 {
