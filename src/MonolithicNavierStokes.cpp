@@ -472,6 +472,9 @@ void MonolithicNavierStokes<dim>::solve_time_step(int precond_type, bool use_ilu
     solution = solution_owned;
 }
 
+
+#include <fstream>
+
 template <unsigned int dim>
 void MonolithicNavierStokes<dim>::run_with_preconditioners()
 {
@@ -489,15 +492,20 @@ void MonolithicNavierStokes<dim>::run_with_preconditioners()
         bool use_ilu;
     };
 
+
     std::vector<SolveResult> results;
 
-    for (int precond_type = 2; precond_type < 5; ++precond_type)
+    for (int precond_type = 2; precond_type <= 4; ++precond_type)
     {
         for (bool use_ilu : {true, false})
         {
-            if (precond_type == 3)
+            if (precond_type == 3) // aSimple case
+            {
                 for (bool use_inner_solver_ : {true, false})
                 {
+                    if (use_ilu && !use_inner_solver_) // Skip aSimple with ILU and no inner solver
+                        continue;
+
                     use_inner_solver = use_inner_solver_;
                     setup(); // Reset everything before each solve
 
@@ -507,63 +515,71 @@ void MonolithicNavierStokes<dim>::run_with_preconditioners()
                     double precond_construct_time = 0.0;
 
                     auto start_total = std::chrono::high_resolution_clock::now();
-
                     solve(precond_type, use_ilu, first_dt_solve_time, first_dt_gmres_iters, total_solve_time, precond_construct_time);
-
                     auto end_total = std::chrono::high_resolution_clock::now();
                     total_solve_time = std::chrono::duration<double>(end_total - start_total).count();
 
-                    std::string name = std::to_string(precond_type) + " " + std::to_string(use_inner_solver);
+                    std::string name = "aSimple_" + std::to_string(use_inner_solver_);
 
                     results.push_back({name, first_dt_gmres_iters, first_dt_solve_time,
                                        total_solve_time, precond_construct_time, use_ilu});
-                }else
-                { 
-                    setup(); // Reset everything before each solve
+                }
+            }
+            else
+            {
+                setup(); // Reset everything before each solve
 
-                    double first_dt_solve_time = 0.0;
-                    int first_dt_gmres_iters = 0;
-                    double total_solve_time = 0.0;
-                    double precond_construct_time = 0.0;
+                double first_dt_solve_time = 0.0;
+                int first_dt_gmres_iters = 0;
+                double total_solve_time = 0.0;
+                double precond_construct_time = 0.0;
 
-                    auto start_total = std::chrono::high_resolution_clock::now();
+                auto start_total = std::chrono::high_resolution_clock::now();
+                solve(precond_type, use_ilu, first_dt_solve_time, first_dt_gmres_iters, total_solve_time, precond_construct_time);
+                auto end_total = std::chrono::high_resolution_clock::now();
+                total_solve_time = std::chrono::duration<double>(end_total - start_total).count();
 
-                    solve(precond_type, use_ilu, first_dt_solve_time, first_dt_gmres_iters, total_solve_time, precond_construct_time);
+                std::string name = (precond_type == 2 ? "SIMPLE" : "Yosida");
 
-                    auto end_total = std::chrono::high_resolution_clock::now();
-                    total_solve_time = std::chrono::duration<double>(end_total - start_total).count();
-
-                    std::string name = std::to_string(precond_type) + " " + std::to_string(use_inner_solver);
-
-                    results.push_back({name, first_dt_gmres_iters, first_dt_solve_time,
-                                       total_solve_time, precond_construct_time, use_ilu});}
+                results.push_back({name, first_dt_gmres_iters, first_dt_solve_time,
+                                   total_solve_time, precond_construct_time, use_ilu});
+            }
         }
+
+        // Write results after each preconditioner finishes execution
+        if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+        {
+            std::ofstream csv_file("preconditioner_results.csv", std::ios::out | std::ios::app);
+
+            // Write header only if file is empty
+            if (csv_file.tellp() == 0)
+            {
+                csv_file << "Precond_Type,GMRES_1st_DT,Time_1st_DT,Total_Solve_Time,Precond_Construct_Time,Use_ILU,Time_Step_Duration\n";
+            }
+
+            for (const auto &result : results)
+            {
+                csv_file << result.precond_type << ","
+                         << result.gmres_first_dt << ","
+                         << result.time_first_dt << ","
+                         << result.total_solve_time << ","
+                         << result.precond_construct_time << ","
+                         << (result.use_ilu ? "True" : "False") << ","
+                         << deltat << "\n";  // Adding time step duration
+
+                pcout << "Saved: " << result.precond_type << " (ILU=" << result.use_ilu << ", Δt=" << deltat << ")" << std::endl;
+            }
+
+            csv_file.close();
+            results.clear(); // Clear the buffer after writing
+        }
+
+        MPI_Barrier(MPI_COMM_WORLD); // Ensure all processes sync before moving to the next preconditioner
     }
 
-    // Print results table
-    pcout << "============================================================================================" << std::endl;
-    pcout << "Preconditioner Performance Summary" << std::endl;
-    pcout << "============================================================================================" << std::endl;
-    pcout << std::setw(15) << "Precond Type"
-          << std::setw(20) << "GMRES 1st DT"
-          << std::setw(20) << "Time 1st DT (s)"
-          << std::setw(25) << "Total Solve Time (s)"
-          << std::setw(25) << "Precond Construct (s)"
-          << std::setw(15) << "Use ILU" << std::endl;
-    pcout << "--------------------------------------------------------------------------------------------" << std::endl;
-
-    for (const auto &result : results)
-    {
-        pcout << std::setw(15) << result.precond_type
-              << std::setw(20) << result.gmres_first_dt
-              << std::setw(20) << result.time_first_dt
-              << std::setw(25) << result.total_solve_time
-              << std::setw(25) << result.precond_construct_time
-              << std::setw(15) << (result.use_ilu ? "True" : "False") << std::endl;
-    }
-
-    pcout << "============================================================================================" << std::endl;
+    pcout << "Results saved to preconditioner_results.csv" << std::endl;
 }
+
 
 // Modify solve to accept preconditioner parameters
 
@@ -584,7 +600,7 @@ void MonolithicNavierStokes<dim>::solve(int precond_type, bool use_ilu, double &
     unsigned int time_step = 0;
     auto start_total = std::chrono::high_resolution_clock::now();
 
-    while (time < deltat)
+    while (time < T - 0.5 * deltat)
     {
         time += deltat;
         ++time_step;
